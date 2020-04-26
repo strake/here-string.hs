@@ -1,7 +1,7 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Data.String.HereSpec where
+module QQ.StringSpec where
 
 import Test.Hspec
 

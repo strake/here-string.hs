@@ -2,26 +2,17 @@
 {-# OPTIONS_GHC -fno-warn-missing-fields #-}
 
 -- | Interpolated here docs
-module Data.String.Here.Interpolated (i, iTrim, template) where
+module QQ.String (istring) where
 
-import Control.Applicative hiding ((<|>))
 import Control.Monad.State
-
 import Data.Char
-import Data.Maybe
-import Data.Monoid
-import Data.String
-import Data.Typeable
 
 import Language.Haskell.Meta
 import Language.Haskell.TH
 import Language.Haskell.TH.Quote
 
 import Text.Parsec
-import Text.Parsec.Prim
 import Text.Parsec.String
-
-import Data.String.Here.Internal
 
 data StringPart = Lit String | Esc Char | Anti (Q Exp)
 
@@ -44,18 +35,8 @@ data EscapeState = Escaped | Unescaped
 -- Characters preceded by a backslash are treated literally. This enables the
 -- inclusion of the literal substring @${@ within your quoted text by writing
 -- it as @\\${@. The literal sequence @\\${@ may be written as @\\\\${@.
-i :: QuasiQuoter
-i = QuasiQuoter {quoteExp = quoteInterp}
-
--- | Like 'i', but with leading and trailing whitespace trimmed
-iTrim :: QuasiQuoter
-iTrim = QuasiQuoter {quoteExp = quoteInterp . trim}
-
--- | Quote the contents of a file as with 'i'
---
--- This enables usage as a simple template engine
-template :: QuasiQuoter
-template = quoteDependentFile i
+istring :: QuasiQuoter
+istring = QuasiQuoter {quoteExp = quoteInterp . dropWhile (== '\n') }
 
 quoteInterp :: String -> Q Exp
 quoteInterp s = either (handleError s) combineParts (parseInterp s)
@@ -68,16 +49,12 @@ handleError expStr parseError = error $
     ++ show parseError
 
 combineParts :: [StringPart] -> Q Exp
-combineParts = combine . map toExpQ
+combineParts = foldr (\x y -> [|$x <> $y|]) [|""|] . fmap toExpQ
   where
-    toExpQ (Lit s) = stringE s
-    toExpQ (Esc c) = stringE [c]
-    toExpQ (Anti expq) = [|toString $expq|]
-    combine [] = stringE ""
-    combine parts = foldr1 (\subExpr acc -> [|$subExpr <> $acc|]) parts
-
-toString :: (Show a, Typeable a, Typeable b, IsString b) => a -> b
-toString x = fromMaybe (fromString $ show x) (cast x)
+    toExpQ = \ case
+        Lit s -> stringE s
+        Esc c -> stringE [c]
+        Anti expq -> expq
 
 parseInterp :: String -> Either ParseError [StringPart]
 parseInterp = parse p_interp ""
@@ -98,8 +75,7 @@ p_antiClose :: Parser String
 p_antiClose = string "}"
 
 p_antiExpr :: Parser (Q Exp)
-p_antiExpr = p_untilUnbalancedCloseBrace
-         >>= either fail (return . return) . parseExp
+p_antiExpr = p_untilUnbalancedCloseBrace >>= either fail (return . return) . parseExp
 
 p_untilUnbalancedCloseBrace :: Parser String
 p_untilUnbalancedCloseBrace = evalStateT go $ HsChompState None 0 "" False
@@ -128,17 +104,14 @@ p_untilUnbalancedCloseBrace = evalStateT go $ HsChompState None 0 "" False
                                          _ -> return ()
                                next
         Double Escaped -> setQuoteState (Double Unescaped) >> next
-    stepBack = lift $
-      updateParserState
-        (\s -> s {statePos = incSourceColumn (statePos s) (-1)})
-        >> getInput
-        >>= setInput . ('}':)
+    stepBack = lift do
+      _ <- updateParserState \s -> s {statePos = incSourceColumn (statePos s) (-1)}
+      getInput >>= setInput . ('}':)
     incBraceCt n = modify $ \st@HsChompState {braceCt} ->
       st {braceCt = braceCt + n}
     setQuoteState qs = modify $ \st -> st {quoteState = qs}
     setIdentifierCharState c = modify $ \st ->
-      st
-        {prevCharWasIdentChar = or [isLetter c, isDigit c, c == '_', c == '\'']}
+      st {prevCharWasIdentChar = or [isLetter c, isDigit c, c == '_', c == '\'']}
 
 p_esc :: Parser StringPart
 p_esc = Esc <$> (char '\\' *> anyChar)
